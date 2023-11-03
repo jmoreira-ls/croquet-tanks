@@ -151,41 +151,21 @@ MyUserManager.register('MyUserManager');
 // an avatar that only that person can use. We randomly generate a color for the user, so we'll be able
 
 
-const distance = 25;
-const fixedAngle = Math.PI / 2.0;
-
 class MyUser extends User {
         init(options) {
                 super.init(options);
                 const base = this.wellKnownModel("ModelRoot").base;
-                const rndm = this.random();
-                var translation = [0, 0, 0];
-                var angle = fixedAngle;
-                if (rndm < 0.5) { // Blue team
-                        this.color = [rndm, rndm, 1];
-                        translation = [- distance, 0, 0];
-                } else { // Red team
-                        this.color = [1, rndm, rndm];
-                        translation = [distance, 0, 0];
-                        angle = - angle;
+                const state = this.wellKnownModel("ModelRoot").state;
+                var props = options.savedProps;
+                if (!props) {
+                        props = state.createUser();
                 }
-                const props = options.savedProps || {
-                        translation,
-                        rotation: q_axisAngle([0, 1, 0], angle),
-                        color: this.color
-                };
+                this.color = props.color;
                 this.avatar = AvatarActor.create({
                         tags: ["avatar", "tank"],
                         parent: base,
                         driver: this.userId,
                         ...props
-                });
-                AvatarActor.create({
-                        tags: ["avatar", "tank"],
-                        parent: base,
-                        driver: this.userId,
-                        color: [0, 0, 0],
-                        translation: [0, 0, 0],
                 });
         }
 
@@ -196,12 +176,81 @@ class MyUser extends User {
 
         destroy() {
                 super.destroy();
+                const state = this.wellKnownModel("ModelRoot").state;
+                if (this.color[0] === 1) { // Red
+                        state.destroyUser("red");
+                } else if (this.color[2] === 1) { // Blue
+                        state.destroyUser("blue");
+                } else { // Spectator
+                        state.destroyUser("spectator");
+                }
                 if (this.avatar) this.avatar.destroy();
         }
 
 }
 MyUser.register('MyUser');
 
+//------------------------------------------------------------------------------------------
+//-- GameStateActor ------------------------------------------------------------------------
+// Manage global game state.
+//------------------------------------------------------------------------------------------
+
+const distance = 25;
+const fixedAngle = Math.PI / 2.0;
+
+class GameStateActor extends Actor {
+        get gamePawnType() { return "" }
+
+        init(options) {
+                super.init(options);
+                this.blue = 0;
+                this.red = 0;
+                this.spectators = 0;
+        }
+
+        createUser() {
+                var translation = [0, 0, 0];
+                var color = [0, 0, 0];
+                var angle = fixedAngle;
+                if (this.blue === 3 && this.red === 3) { // Spectator
+                        this.spectators++;
+                } else if (this.blue <= this.red) { // Blue
+                        const val = (this.blue * 50) / 255.0;
+                        color = [val, val, 1];
+                        translation = [- distance, 0, 0];
+                        this.blue++;
+                } else { // Red
+                        const val = (this.red * 50) / 255.0;
+                        color = [1, val, val];
+                        translation = [distance, 0, 0];
+                        angle = - angle;
+                        this.red++;
+                }
+
+                return {
+                        translation,
+                        rotation: q_axisAngle([0, 1, 0], angle),
+                        color
+                };
+        }
+
+        destroyUser(team) {
+                switch (team) {
+                        case "red":
+                                this.red--;
+                                break;
+                        case "blue":
+                                this.blue--;
+                                break;
+                        case "spectator":
+                                this.spectators--;
+                                break;
+                        default:
+                                console.log("Unknow team user");
+                }
+        }
+}
+GameStateActor.register('GameStateActor');
 
 //------------------------------------------------------------------------------------------
 //-- MyModelRoot ---------------------------------------------------------------------------
@@ -217,6 +266,7 @@ export class MyModelRoot extends GameModelRoot {
                 super.init(options);
                 console.log("Start model root!");
                 this.base = BaseActor.create();
+                this.state = GameStateActor.create();
         }
 
 }
