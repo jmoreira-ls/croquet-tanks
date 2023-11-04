@@ -23,20 +23,22 @@ class BaseActor extends mix(Actor).with(AM_Spatial, AM_Grid) {
 }
 BaseActor.register('BaseActor');
 
+
 //------------------------------------------------------------------------------------------
 //--MissileActor ---------------------------------------------------------------------------
 // Fired by the tank - they destroy the bots but bounce off of everything else
 //------------------------------------------------------------------------------------------
-const missileSpeed = 75;
 
 class MissileActor extends mix(Actor).with(AM_Spatial, AM_Behavioral) {
         get gamePawnType() { return "missile" }
 
         get color() { return this._color || [0.5, 0.5, 0.5] }
+        get team() { return this._team || "" }
 
         init(options) {
                 super.init(options);
-                this.future(2000).destroy(); // destroy after some time
+                this.subscribe(options.team, "destroyBullets", this.destroyBullets);
+                this.future(3000).destroy();
                 this.tick();
         }
 
@@ -48,16 +50,24 @@ class MissileActor extends mix(Actor).with(AM_Spatial, AM_Behavioral) {
         test() {
                 const tank = this.parent.pingAny("tank", this.translation, 4, this);
                 if (tank) {
-                        console.log("hit");
-                        if ((this.color[0] === tank.color[0] && this.color[0] === 1) ||
-                                (this.color[2] === tank.color[2] && this.color[2] === 1)) return;
+                        if (this.team === tank.team || tank.team === "spectator") return;
                         const d2 = v_dist2Sqr(this.translation, tank.translation);
                         if (d2 < 4) { // bot radius is 2
-                                tank.destroy();
+                                const userId = tank.driver;
+                                const state = this.wellKnownModel("ModelRoot").state;
+                                state.score(this.team);
+                                this.publish(userId, "playerKilled");
+                                tank.killMe();
                                 // console.log(`bot ${bot.id} hit at distance ${Math.sqrt(d2).toFixed(2)}`);
                                 this.destroy();
                                 return;
                         }
+                }
+        }
+
+        destroyBullets(gradient) {
+                if (this.color[1] === gradient) {
+                        this.destroy();
                 }
         }
 }
@@ -69,10 +79,13 @@ MissileActor.register('MissileActor');
 
 // AvatarActor includes the AM_Avatar mixin.  Avatars have a driver property that holds the viewId of the user controlling them.
 
+const missileSpeed = 50;
+
 class AvatarActor extends mix(Actor).with(AM_Spatial, AM_Avatar, AM_OnGrid) {
         get gamePawnType() { return "tank" }
 
         get color() { return this._color || [0.5, 0.5, 0.5] }
+        get team() { return this._team || "" }
 
         init(options) {
                 super.init(options);
@@ -89,15 +102,21 @@ class AvatarActor extends mix(Actor).with(AM_Spatial, AM_Avatar, AM_OnGrid) {
                 const missile = MissileActor.create({
                         parent: this.parent,
                         translation,
-                        color: this.color
+                        color: this.color,
+                        team: this.team,
                 });
                 missile.go = missile.behavior.start({
                         name: "GoBehavior",
                         aim,
                         speed: missileSpeed,
-                        tickRate: 20
+                        tickRate: 20,
                 });
                 missile.ballisticVelocity = aim.map(val => val * missileSpeed);
+        }
+
+
+        killMe() {
+                this.destroy();
         }
 }
 AvatarActor.register('AvatarActor');
@@ -113,35 +132,22 @@ AvatarActor.register('AvatarActor');
 class MyUserManager extends UserManager {
         init() {
                 super.init();
-                this.props = new Map();
-                this.propsTimeout = 60 * 60 * 1000; // 1 hour
         }
 
         get defaultUser() { return MyUser }
 
         createUser(options) {
                 const { userId } = options;
-                // restore saved props
-                const saved = this.props.get(userId);
-                if (saved) {
-                        options = { ...options, savedProps: saved.props };
-                        this.props.delete(userId);
-                }
+                const state = this.wellKnownModel("ModelRoot").state;
+                options = { ...options, stateProps: state.createPlayer(userId) }
                 // delete old saved props
-                const expired = this.now() - this.propsTimeout;
-                for (const [uid, { lastSeen }] of this.props) {
-                        if (lastSeen < expired) {
-                                this.props.delete(uid);
-                        }
-                }
                 return super.createUser(options);
         }
 
         destroyUser(user) {
-                const props = user.saveProps();
-                if (props) {
-                        this.props.set(user.userId, { props, lastSeen: this.now() });
-                }
+                const userId = user.userId;
+                const state = this.wellKnownModel("ModelRoot").state;
+                state.destroyPlayer(userId);
                 super.destroyUser(user);
         }
 }
@@ -154,13 +160,62 @@ MyUserManager.register('MyUserManager');
 class MyUser extends User {
         init(options) {
                 super.init(options);
-                const base = this.wellKnownModel("ModelRoot").base;
-                const state = this.wellKnownModel("ModelRoot").state;
-                var props = options.savedProps;
-                if (!props) {
-                        props = state.createUser();
+                const props = options.stateProps.userProps;
+                const waiting = options.stateProps.waiting;
+                if (!waiting) {
+                        const base = this.wellKnownModel("ModelRoot").base;
+                        this.avatar = AvatarActor.create({
+                                tags: ["avatar", "tank"],
+                                parent: base,
+                                driver: this.userId,
+                                ...props
+                        });
+                        if (props.team === "red" || props.team === "blue") {
+                                this.publish(props.gradient, "updatePair", true);
+                        }
+                } else {
+                        this.avatar = null;
                 }
-                this.color = props.color;
+                this.noSpawn = false;
+                this.set({ props });
+                if (props.team === "red" || props.team === "blue") {
+                        this.subscribe(props.gradient, "updatePair", this.updatePair);
+                        this.subscribe(this.userId, "playerKilled", this.killed);
+                }
+                this.subscribe("all", "gameEnded", this.gameEnded);
+                this.subscribe("users", "restartGame", this.respawn);
+        }
+
+        get props() { return this._props }
+
+        updatePair(create) {
+                if (create) {
+                        const props = this.props;
+                        const base = this.wellKnownModel("ModelRoot").base;
+                        this.avatar = AvatarActor.create({
+                                tags: ["avatar", "tank"],
+                                parent: base,
+                                driver: this.userId,
+                                ...props
+                        });
+                } else if (this.avatar) {
+                        this.avatar.destroy();
+                        this.avatar = null;
+                        const gradient = this.props.gradient;
+                        const team = this.props.team;
+                        this.publish(team, "destroyBullets", gradient);
+                }
+        }
+
+        killed() {
+                this.avatar = null;
+                this.future(2000).respawn();
+        }
+
+        respawn() {
+                if (this.avatar || this.noSpawn) return;
+                const props = this.props;
+                const base = this.wellKnownModel("ModelRoot").base;
                 this.avatar = AvatarActor.create({
                         tags: ["avatar", "tank"],
                         parent: base,
@@ -169,24 +224,27 @@ class MyUser extends User {
                 });
         }
 
-        saveProps() {
-                const { color, translation, rotation } = this.avatar;
-                return { color, translation, rotation };
+        gameEnded() {
+                this.noSpawn = true;
+                if (this.avatar) {
+                        const gradient = this.props.gradient;
+                        const team = this.props.team;
+                        this.publish(team, "destroyBullets", gradient);
+                        this.avatar.killMe();
+                        this.avatar = null;
+                }
         }
 
         destroy() {
-                super.destroy();
-                const state = this.wellKnownModel("ModelRoot").state;
-                if (this.color[0] === 1) { // Red
-                        state.destroyUser("red");
-                } else if (this.color[2] === 1) { // Blue
-                        state.destroyUser("blue");
-                } else { // Spectator
-                        state.destroyUser("spectator");
+                const team = this.props.team;
+                if (team === "red" || team === "blue") {
+                        const gradient = this.props.gradient;
+                        this.publish(team, "destroyBullets", gradient);
+                        this.publish(gradient, "updatePair", false);
                 }
+                super.destroy();
                 if (this.avatar) this.avatar.destroy();
         }
-
 }
 MyUser.register('MyUser');
 
@@ -196,51 +254,106 @@ MyUser.register('MyUser');
 //------------------------------------------------------------------------------------------
 
 const distance = 25;
+const offsetDistance = 7;
 const fixedAngle = Math.PI / 2.0;
+const gradients = [0, 0.275, 0.549]
+const finalScore = 5;
 
 class GameStateActor extends Actor {
-        get gamePawnType() { return "" }
+        get gamePawnType() { return "gamestate" }
 
         init(options) {
                 super.init(options);
-                this.blue = 0;
-                this.red = 0;
+                this.props = new Map();
+                this.blue = [];
+                this.red = [];
+                this.redScore = 0;
+                this.blueScore = 0;
+                this.redPlayers = 0;
+                this.bluePlayers = 0;
                 this.spectators = 0;
+                this.gameEnded = false;
+                this.listen("restartGame", this.restartGame);
         }
 
-        createUser() {
-                var translation = [0, 0, 0];
-                var color = [0, 0, 0];
-                var angle = fixedAngle;
-                if (this.blue === 3 && this.red === 3) { // Spectator
-                        this.spectators++;
-                } else if (this.blue <= this.red) { // Blue
-                        const val = (this.blue * 50) / 255.0;
-                        color = [val, val, 1];
-                        translation = [- distance, 0, 0];
-                        this.blue++;
+
+        score(team) {
+                switch (team) {
+                        case "red":
+                                this.redScore++;
+                                break;
+                        case "blue":
+                                this.blueScore++;
+                                break;
+                        default:
+                                console.log("Unable to score");
+                }
+                if (this.blueScore >= finalScore || this.redScore >= finalScore) {
+                        this.gameEnded = true;
+                        this.publish("all", "gameEnded");
+                }
+        }
+
+        calculateOffset(off) {
+                return - (offsetDistance * 2) + offsetDistance * (off);
+        }
+
+        createPlayer(userId) {
+                const blue_len = this.blue.length;
+                const red_len = this.red.length;
+                if (blue_len === 3 && red_len === 3) { // Spectator
+                        this.props.set(userId, {
+                                team: "spectator",
+                                gradient: 0,
+                                color: [0, 0, 0],
+                                translation: [0, 0, -20],
+                                rotation: [0, 0, 0],
+                        });
+                } else if (blue_len <= red_len) { // Blue
+                        const gradient = gradients.filter(x => !this.blue.includes(x))[0];
+                        this.blue.push(gradient);
+                        const offset = this.calculateOffset(this.blue.length);
+                        this.props.set(userId, {
+                                team: "blue",
+                                gradient,
+                                color: [gradient, gradient, 1],
+                                translation: [-distance, 0, offset],
+                                rotation: q_axisAngle([0, 1, 0], fixedAngle),
+                        });
+                        this.bluePlayers++;
                 } else { // Red
-                        const val = (this.red * 50) / 255.0;
-                        color = [1, val, val];
-                        translation = [distance, 0, 0];
-                        angle = - angle;
-                        this.red++;
+                        const gradient = gradients.filter(x => !this.red.includes(x))[0];
+                        this.red.push(gradient);
+                        const offset = this.calculateOffset(this.red.length);
+                        this.props.set(userId, {
+                                team: "red",
+                                gradient,
+                                color: [1, gradient, gradient],
+                                translation: [distance, 0, offset],
+                                rotation: q_axisAngle([0, 1, 0], -fixedAngle),
+                        });
+                        this.redPlayers++;
                 }
 
                 return {
-                        translation,
-                        rotation: q_axisAngle([0, 1, 0], angle),
-                        color
+                        userProps: this.props.get(userId),
+                        waiting: this.red.length != this.blue.length,
                 };
         }
 
-        destroyUser(team) {
+        destroyPlayer(userId) {
+                let i = 0;
+                const { team, gradient } = this.props.get(userId);
                 switch (team) {
-                        case "red":
-                                this.red--;
-                                break;
                         case "blue":
-                                this.blue--;
+                                i = this.blue.indexOf(gradient);
+                                this.blue.splice(i, 1);
+                                this.bluePlayers--;
+                                break;
+                        case "red":
+                                i = this.red.indexOf(gradient);
+                                this.red.splice(i, 1);
+                                this.redPlayers--;
                                 break;
                         case "spectator":
                                 this.spectators--;
@@ -248,6 +361,15 @@ class GameStateActor extends Actor {
                         default:
                                 console.log("Unknow team user");
                 }
+                this.props.delete(userId);
+        }
+
+        restartGame() {
+                console.log("restarting game");
+                this.redScore = 0;
+                this.blueScore = 0;
+                this.gameEnded = false;
+                this.publish("users", "restartGame");
         }
 }
 GameStateActor.register('GameStateActor');

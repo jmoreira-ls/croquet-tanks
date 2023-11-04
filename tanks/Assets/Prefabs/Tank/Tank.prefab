@@ -59,6 +59,7 @@ MonoBehaviour:
   watchedProperties:
   - driver
   - color
+  - team
 --- !u!135 &-3773017376682265891
 SphereCollider:
   m_ObjectHideFlags: 0

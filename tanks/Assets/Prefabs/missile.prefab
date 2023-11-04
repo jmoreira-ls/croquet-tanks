@@ -54,6 +54,7 @@ MonoBehaviour:
   staticProperties: []
   watchedProperties:
   - color
+  - team
 --- !u!1 &2449006539451563932
 GameObject:
   m_ObjectHideFlags: 0

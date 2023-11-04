@@ -1,57 +1,78 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
 public class GameState : MonoBehaviour, ICroquetDriven
 {
-    public float health;
+    public int redScore;
+    public int blueScore;
+    public int redPlayers;
+    public int bluePlayers;
     public bool gameEnded;
-    public int totalBots;
-    public int wave;
-    
+
+    public static void StateRestart()
+    {
+        Debug.Log("Button press");
+        GameState currentState = null;
+        GameObject gameStateGO = GameObject.FindWithTag("GameController");
+        if (gameStateGO != null)
+        {
+            currentState = gameStateGO.GetComponent<GameState>();
+        }
+
+        if (currentState == null)
+        {
+            Debug.LogWarning("Error getting the gamestate");
+            return;
+        }
+
+        Debug.Log("Restarting game");
+        currentState.GameRestart();
+    }
+
     void Awake()
     {
+        Croquet.Listen(gameObject, "redScoreSet", RedScoreSet);
+        Croquet.Listen(gameObject, "blueScoreSet", BlueScoreSet);
+        Croquet.Listen(gameObject, "redPlayersSet", RedPlayersSet);
+        Croquet.Listen(gameObject, "bluePlayersSet", BluePlayersSet);
         Croquet.Listen(gameObject, "gameEndedSet", GameEndedSet);
-        Croquet.Listen(gameObject, "waveSet", WaveSet);
-        Croquet.Listen(gameObject, "totalBotsSet", TotalBotsSet);
-        Croquet.Listen(gameObject, "healthSet", HealthSet);
     }
 
     public void PawnInitializationComplete()
     {
+        RedScoreSet(Croquet.ReadActorFloat(gameObject, "redScore"));
+        BlueScoreSet(Croquet.ReadActorFloat(gameObject, "blueScore"));
+        RedPlayersSet(Croquet.ReadActorFloat(gameObject, "redPlayers"));
+        BluePlayersSet(Croquet.ReadActorFloat(gameObject, "bluePlayers"));
         GameEndedSet(Croquet.ReadActorBool(gameObject, "gameEnded"));
-        WaveSet(Croquet.ReadActorFloat(gameObject, "wave"));
-        TotalBotsSet(Croquet.ReadActorFloat(gameObject, "totalBots"));
-        HealthSet(Croquet.ReadActorFloat(gameObject, "health"));
     }
 
-    public void StartGame()
-    {
-        Croquet.Publish("game", "startGame");
+    public void GameRestart() {
+        Debug.Log("Restarting state");
+        Croquet.Say(gameObject, "restartGame");
     }
-    
-    public void GameEndedSet(bool gameEnded)
+
+    void RedScoreSet(float redScore)
+    {
+        this.redScore = (int)redScore;
+    }
+
+    void BlueScoreSet(float blueScore)
+    {
+        this.blueScore = (int)blueScore;
+    }
+
+    void RedPlayersSet(float redPlayers)
+    {
+        this.redPlayers = (int)redPlayers;
+    }
+
+    void BluePlayersSet(float bluePlayers)
+    {
+        this.bluePlayers = (int)bluePlayers;
+    }
+
+    void GameEndedSet(bool gameEnded)
     {
         this.gameEnded = gameEnded;
-        // Debug.Log($"GameEndedSet: {gameEnded}");
     }
-
-    void WaveSet(float wave)
-    {
-        this.wave = (int)wave;
-        // Debug.Log($"WaveSet: {wave}");
-    }
-    
-    void TotalBotsSet(float bots)
-    {
-        this.totalBots = (int)bots;
-        // Debug.Log($"TotalBotsSet: {bots}");
-    }
-    
-    void HealthSet(float health)
-    {
-        // Debug.Log($"HealthSet: {health}");
-        this.health = health;
-    }
-
 }

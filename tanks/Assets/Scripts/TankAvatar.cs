@@ -1,32 +1,72 @@
 using UnityEngine;
 
-public class TankAvatar : MonoBehaviour
+public class TankAvatar : MonoBehaviour, ICroquetDriven
 {
     public float speed;
+    public string team;
+    public bool destroyed;
 
     private float lastShootTime = 0;
     private float waitShootTime = 0.25f; // 250ms
+    private float distanceLimit = 15.0f;
 
     private int croquetHandle;
-    private CroquetAvatarComponent croquetAvatarComponent;
+    private GameState gameState;
+    private CroquetAvatarComponent avatarComponent;
 
-    void Start()
+    void Awake()
     {
+        Croquet.Listen(gameObject, "teamSet", TeamSet);
+        Croquet.Listen(gameObject, "destroyedSet", DestroyedSet);
+    }
+
+    public void PawnInitializationComplete()
+    {
+        TeamSet(Croquet.ReadActorString(gameObject, "team"));
         croquetHandle = gameObject.GetComponent<CroquetEntityComponent>().croquetHandle;
-        croquetAvatarComponent = gameObject.GetComponent<CroquetAvatarComponent>();
-        // Debug.Log($"TankAvatar on {croquetHandle}");
+        avatarComponent = gameObject.GetComponent<CroquetAvatarComponent>();
+    }
+
+    void TeamSet(string team)
+    {
+        this.team = team;
+    }
+
+    void DestroyedSet(bool destroyed)
+    {
+        this.destroyed = destroyed;
     }
 
     void Update()
     {
-        CroquetAvatarComponent activeAvatar = CroquetAvatarSystem.Instance.GetActiveAvatarComponent();
-        if (croquetAvatarComponent == null || croquetAvatarComponent != activeAvatar) return;
+        if (avatarComponent == null) return;
 
-        float vertical = Input.GetAxis("Vertical");
-        float speedNow = speed * vertical;
+        if (gameState == null)
+        {
+            GameObject gameStateGO = GameObject.FindWithTag("GameController");
+            if (gameStateGO != null)
+            {
+                gameState = gameStateGO.GetComponent<GameState>();
+            }
 
-        Drive(speedNow);
-        Shoot(speedNow);
+            if (gameState == null) return;
+        }
+
+        if (CroquetAvatarSystem.Instance.GetActiveAvatarComponent() == avatarComponent && !gameState.gameEnded)
+        {
+            if (team == "red" || team == "blue")
+            {
+                float pos = transform.position.z;
+                float vertical = Input.GetAxis("Vertical");
+                float speedNow = 0.0f;
+                if (!((pos > distanceLimit && vertical > 0.0f) || (pos < -distanceLimit && vertical < 0.0f)))
+                {
+                    speedNow = speed * vertical;
+                }
+                Drive(speedNow);
+                Shoot(speedNow);
+            }
+        }
     }
 
     void Drive(float speed)
@@ -53,7 +93,7 @@ public class TankAvatar : MonoBehaviour
         float now = Time.realtimeSinceStartup;
         if (now - lastShootTime < waitShootTime) return;
 
-        if (Input.GetKeyDown(KeyCode.Space) || Input.GetMouseButtonDown(0))
+        if (Input.GetKeyDown(KeyCode.Space))
         {
             lastShootTime = now;
 
